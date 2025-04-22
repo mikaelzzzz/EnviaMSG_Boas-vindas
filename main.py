@@ -132,32 +132,43 @@ async def root():
 async def webhook(request: Request):
     raw = await request.body()
 
-    # 1) HMAC (opcional, mas seguro)
+    # 1️⃣ HMAC (opcional, mas recomendado)
     if not verify_signature(raw, request.headers.get("X-Hub-Signature-256")):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    # 2) Valida conteúdo JSON
+    # 2️⃣ DEBUG opcional: imprime o JSON recebido
+    print("[JSON recebido da ZapSign]")
+    print(raw.decode())
+
+    # 3️⃣ Validação do JSON
     try:
         data = WebhookPayload.model_validate_json(raw)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Bad payload: {e}")
+        print("[ERRO NA VALIDAÇÃO]:", e)
+        raise HTTPException(status_code=400, detail=f"Erro no JSON: {e}")
 
-    # 3) Ignora eventos enquanto faltam assinaturas
+    # 4️⃣ Ignora se o documento ainda estiver "pending"
     if data.status != "signed":
         return
 
-    s = data.signer_who_signed
-    full_name, email = s.name.strip(), s.email.lower()
-    phone = f"+{s.phone_country}{s.phone_number}"
+    signer = data.signer_who_signed
+    full_name = signer.name.strip()
+    email = signer.email.lower()
+
+    # 5️⃣ MONTA TELEFONE no formato correto (E.164, sem símbolos)
+    raw_phone = f"{signer.phone_country}{signer.phone_number}"
+    phone = re.sub(r"\D", "", raw_phone)  # resultado: 5511975578651
     first = full_name.split()[0]
 
-    # 4) Novo × Renovação
+    # 6️⃣ Verifica se é aluno novo ou renovação
     already = await notion_search_student(email, full_name)
 
     if already:
-        msg = (f"Olá {first}, parabéns pela escolha de continuar seus estudos. "
-               "Tenho certeza de que a continuação dessa jornada será incrível. "
-               "Já sabe, não é? Se precisar de algo, pode contar com a gente! Rumo à fluência!")
+        msg = (
+            f"Olá {first}, parabéns pela escolha de continuar seus estudos. "
+            "Tenho certeza de que a continuação dessa jornada será incrível. "
+            "Já sabe, não é? Se precisar de algo, pode contar com a gente! Rumo à fluência!"
+        )
     else:
         answers = {a.variable.lower(): a.value for a in data.answers}
         nome_filho = answers.get("nome completo", "sua filha")
@@ -170,5 +181,6 @@ async def webhook(request: Request):
             "Lembrando que será somente um e‑mail para todas as plataformas."
         )
 
-    # 5) Envia WhatsApp (não bloqueia o webhook)
+    # 7️⃣ Envia WhatsApp via Z‑API
     await send_whatsapp(phone, msg)
+
